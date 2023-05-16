@@ -1,8 +1,13 @@
+
 import torch 
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from tqdm import trange
+import os
+import pickle
+
+import torch.backends.cudnn as cudnn
 import numpy as np
 
 ## use batch loader, dont use numpy, optimize
@@ -24,9 +29,14 @@ def create_dataset(size, variable=False):
     else:
         return torch.randint(2, size=(size,50)).type(torch.float32)
 
+
+def save_checkpoint(state, save_path, filename='variable_checkpoint.pkl'):
+    with open(os.path.join(save_path, filename), 'wb') as handle:
+        pickle.dump(state, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
 # Train the model
 def training_loop(data, model, criterion, optimizer,Y):
-    for epoch in ( a := trange(500)):
+    for epoch in ( a := trange(100)):
         running_loss = 0.0
         for X in range(len(data)):
             input_seq = data[X].unsqueeze(1).unsqueeze(2).to(torch.device("cuda"))
@@ -37,37 +47,43 @@ def training_loop(data, model, criterion, optimizer,Y):
             optimizer.step()
             running_loss += loss.item()
 
-        a.set_description('Epoch %d loss: %.3f' % (epoch + 1, running_loss / len(data)))
+        acc = test(model, criterion, optimizer)
 
+        if epoch % 5:
+            save_checkpoint({
+                'epoch': epoch,
+                'state_dict': model.module.state_dict(),
+            }, "./")
 
-def someother():
-# Generate a test set of binary strings
-    X_test = np.random.randint(2, size=(10000, 50)).astype(np.float32)
+        a.set_description('Epoch %d loss: %.4f ; val acc : %.4f' % (epoch + 1, running_loss / len(data), acc))
 
-# Compute parity for each sequence
-    y_test = np.sum(X_test, axis=1) % 2
-    y_test = torch.from_numpy(y_test).unsqueeze(1)
+def test(model, criterion, optimizer):
+    X_test = create_dataset(10,True)
+    y_test = torch.sum(X_test, axis=1) % 2
+    y_test = y_test.unsqueeze(1)
 
-# Evaluate the model on the test set
     with torch.no_grad():
         correct = 0
         for i in range(len(X_test)):
-            input_seq = torch.from_numpy(X_test[i]).unsqueeze(1).unsqueeze(2)
+            input_seq = X_test[i].unsqueeze(1).unsqueeze(2).to(torch.device("cuda"))
             output = model(input_seq)
             prediction = (output >= 0.5).float()
-            correct += (prediction == y_test[i]).float().sum()
+            correct += (prediction == y_test[i].to(torch.device("cuda"))).float().sum()
 
         accuracy = 100.0 * correct / len(X_test)
-        print('Test accuracy: %.2f%%' % accuracy)
-
+    return accuracy
 
 if __name__ == "__main__":
-    data = create_dataset(100, True)
+    torch.cuda.empty_cache()
+    data = create_dataset(50000, True)
 
     Y = torch.sum(data, axis=1) % 2
     Y = Y.unsqueeze(1).to(torch.device("cuda"))
 
     model = XOR(input_size=1, hidden_size=32, output_size=1).to(torch.device("cuda"))
+    model = torch.nn.DataParallel(model).cuda()
+    cudnn.benchmark = True
+
     criterion = nn.BCELoss()
     optimizer = optim.Adam(model.parameters())
 
