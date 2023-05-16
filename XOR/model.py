@@ -9,6 +9,7 @@ import pickle
 
 import torch.backends.cudnn as cudnn
 import numpy as np
+from torch.utils.tensorboard import SummaryWriter
 
 ## use batch loader, dont use numpy, optimize
 
@@ -35,7 +36,7 @@ def save_checkpoint(state, save_path, filename='variable_checkpoint.pkl'):
         pickle.dump(state, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
 # Train the model
-def training_loop(data, model, criterion, optimizer,Y):
+def training_loop(data, model, criterion, optimizer,Y, i, train_writter, test_writter):
     for epoch in ( a := trange(100)):
         running_loss = 0.0
         for X in range(len(data)):
@@ -47,17 +48,18 @@ def training_loop(data, model, criterion, optimizer,Y):
             optimizer.step()
             running_loss += loss.item()
 
-        acc = test(model, criterion, optimizer)
+        acc = test(model, criterion, optimizer, epoch)
+        train_writer.add_scalar('TRAINING lOSS', loss.item(), epoch)
 
-        if epoch % 5:
+        if epoch % 2:
             save_checkpoint({
                 'epoch': epoch,
                 'state_dict': model.module.state_dict(),
-            }, "./")
+            }, "./", f"Checkpoint_{i}.pkl")
 
         a.set_description('Epoch %d loss: %.4f ; val acc : %.4f' % (epoch + 1, running_loss / len(data), acc))
 
-def test(model, criterion, optimizer):
+def test(model, criterion, optimizer, epoch):
     X_test = create_dataset(10,True)
     y_test = torch.sum(X_test, axis=1) % 2
     y_test = y_test.unsqueeze(1)
@@ -71,20 +73,25 @@ def test(model, criterion, optimizer):
             correct += (prediction == y_test[i].to(torch.device("cuda"))).float().sum()
 
         accuracy = 100.0 * correct / len(X_test)
+        val_writer.add_scalar('VALIDATION lOSS', accuracy, epoch)
     return accuracy
 
 if __name__ == "__main__":
     torch.cuda.empty_cache()
-    data = create_dataset(50000, True)
-
-    Y = torch.sum(data, axis=1) % 2
-    Y = Y.unsqueeze(1).to(torch.device("cuda"))
 
     model = XOR(input_size=1, hidden_size=32, output_size=1).to(torch.device("cuda"))
     model = torch.nn.DataParallel(model).cuda()
     cudnn.benchmark = True
 
     criterion = nn.BCELoss()
-    optimizer = optim.Adam(model.parameters())
+    optimizer = optim.Adam(model.parameters(), lr = .0005)
 
-    training_loop(data, model,criterion, optimizer,Y)
+    for i in range(0,2):
+        train_writer = SummaryWriter(os.path.join("./", f"train{i}"))
+        val_writer = SummaryWriter(os.path.join("./", f"validate{i}"))
+        data = create_dataset(1000, i)
+
+        Y = torch.sum(data, axis=1) % 2
+        Y = Y.unsqueeze(1).to(torch.device("cuda"))
+
+        training_loop(data, model,criterion, optimizer,Y, i, train_writer, val_writer)
